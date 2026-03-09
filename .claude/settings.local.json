@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(conda run -n streaming_video_visualization_tool pip install opencv-python==4.13.0.92)"
+    ]
+  }
+}

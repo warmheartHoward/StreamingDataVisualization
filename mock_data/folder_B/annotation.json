@@ -1,0 +1,123 @@
+[
+  {
+    "meta_info": {
+      "id": "00000196_reencoded_2fps",
+      "dataset": "Internal_Task_01",
+      "language": "zh",
+      "video_path": "data/74cea079e4304a99ba435a8cc3ec601a/0127_gux/gemini_zooandmuseum/botanical_garden/00000196_reencoded_2fps/output_1.mp4",
+      "duration": 125.0,
+      "data_type": "CAP",
+      "domain": "",
+      "task_type": "",
+      "task_type_source": "model_annotated",
+      "data_production": [
+        {
+          "version": "v2",
+          "fps": 2.0
+        }
+      ],
+      "quality_control": [
+        {
+          "version": "qc_model_v1.5",
+          "result": ""
+        }
+      ]
+    },
+    "video_path": "data/74cea079e4304a99ba435a8cc3ec601a/0127_gux/gemini_zooandmuseum/botanical_garden/00000196_reencoded_2fps/output_1.mp4",
+    "frame_path": [
+      "data/output_1/time_0.00s.jpg",
+      "data/output_1/time_0.50s.jpg"
+    ],
+    "extracted_fps": 2.0,
+    "data": [
+      {
+        "question": {
+          "content": "2_这个场景中出现了哪些不同类型的供人行走的建筑结构？",
+          "time": 0.0
+        },
+        "response": [
+          {
+            "content": "2_此时画面展示了一条笔直延伸进湖中的铺石路堤，两侧种满了红色的花。",
+            "st_time": "",
+            "end_time": "",
+            "time": 0.5,
+            "logits": {
+              "</first_response>": 1.0,
+              "</second_response>": 0.0,
+              "</silence>": 0.0,
+              "</standby>": 0.0
+            }
+          },
+          {
+            "content": "接着出现了一座白色的拱形石桥，桥面带有台阶。",
+            "st_time": "",
+            "end_time": "",
+            "time": 16,
+            "logits": {
+              "</first_response>": 1.0,
+              "</second_response>": 0.0,
+              "</silence>": 0.0,
+              "</standby>": 0.0
+            }
+          },
+          {
+            "content": "随后镜头展示了一座曲折延伸在宽阔水面上的九曲桥。",
+            "st_time": "",
+            "end_time": "",
+            "time": 26,
+            "logits": {
+              "</first_response>": 1.0,
+              "</second_response>": 0.0,
+              "</silence>": 0.0,
+              "</standby>": 0.0
+            }
+          }
+        ]
+      },
+      {
+        "question": {
+          "content": "在这个场景中，画面展示了哪些具体的指引标志或地标建筑？",
+          "time": 40
+        },
+        "response": [
+          {
+            "content": "视频开始时，画面特写了一个指引路牌，上面清晰地列出了“草药园”、“乡土珍稀园”以及“温室、科普馆”的方向指示。",
+            "st_time": "",
+            "end_time": "",
+            "time": 40,
+            "logits": {
+              "</first_response>": 1.0,
+              "</second_response>": 0.0,
+              "</silence>": 0.0,
+              "</standby>": 0.0
+            }
+          },
+          {
+            "content": "随后，镜头聚焦远处的一个巨大半球形玻璃温室建筑，并在画面上通过特效箭头标注其为“科普馆”。",
+            "st_time": "",
+            "end_time": "",
+            "time": 42,
+            "logits": {
+              "</first_response>": 1.0,
+              "</second_response>": 0.0,
+              "</silence>": 0.0,
+              "</standby>": 0.0
+            }
+          },
+          {
+            "content": "视频后段镜头切换，展示了两座相邻的巨大玻璃穹顶建筑的近景外观，建筑入口上方可见“温室、科普馆”的标识。",
+            "st_time": "",
+            "end_time": "",
+            "time": 52,
+            "logits": {
+              "</first_response>": 1.0,
+              "</second_response>": 0.0,
+              "</silence>": 0.0,
+              "</standby>": 0.0
+            }
+          }
+        ]
+      }
+    ]
+  }
+]
