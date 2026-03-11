@@ -16,8 +16,10 @@ import os
 
 from typing import Optional
 
+import altair as alt
 import cv2
 import numpy as np
+import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 
@@ -46,14 +48,13 @@ st.markdown(
 _DEFAULTS: dict = {
     "root_dir":        "mock_data",
     "max_display":     4,
-    "main_folder":     "XXX",
     "sel_mode":        False,       # 选择模式开关
-    "selected":        [],          # 已勾选的文件夹列表
+    "selected":        [],          # 已勾选的 JSON 文件列表
     "frame_paths":     [],          # 当前 JSON 中的帧路径列表
     "display_indices": [],          # 当前窗口中显示的帧索引列表（最多 3 个）
     "json_data":       None,        # 当前加载的完整 JSON 数据
+    "threshold":       0.5,         # 触发阈值 [0, 1]
     "_toast":          None,        # 待展示的 toast 消息
-    "_mf_widget":      "XXX",       # 主文件夹文本框 widget key 的存储
 }
 for _k, _v in _DEFAULTS.items():
     if _k not in st.session_state:
@@ -98,13 +99,29 @@ def nav_right() -> None:
 # 辅助函数
 # ════════════════════════════════════════════════════════════════════════════
 
-def get_subfolders(root: str) -> list:
-    """返回 root 下所有直接子文件夹（排序后）。"""
+def response_matches_frame(r: dict, frame_time: float) -> bool:
+    """判断 response 条目是否与给定帧时间匹配。
+
+    优先逻辑：若 st_time 与 end_time 均非空，则判断 frame_time 是否落在
+    [st_time, end_time] 区间内；否则退回到 time 字段精确匹配。
+    """
+    st_t  = r.get("st_time", "")
+    end_t = r.get("end_time", "")
+    if st_t != "" and end_t != "":
+        try:
+            return float(st_t) <= frame_time <= float(end_t)
+        except (ValueError, TypeError):
+            pass
+    return float(r.get("time", -1)) == frame_time
+
+
+def get_json_files(root: str) -> list:
+    """返回 root 下所有直接 JSON 文件（排序后）。"""
     if not root or not os.path.isdir(root):
         return []
     return sorted(
-        d for d in os.listdir(root)
-        if os.path.isdir(os.path.join(root, d))
+        f for f in os.listdir(root)
+        if f.lower().endswith(".json") and os.path.isfile(os.path.join(root, f))
     )
 
 
@@ -121,21 +138,21 @@ def find_first_json(folder_path: str):
 
 
 def refresh_display() -> None:
-    """当选中数目达到最大展示数时，从主文件夹加载 JSON 并重置帧索引。"""
+    """当选中数目达到最大展示数时，从第一个选中的 JSON 文件加载帧路径。"""
     sel   = st.session_state.selected
     root  = st.session_state.root_dir
     max_d = st.session_state.max_display
-    mf    = st.session_state.main_folder
 
-    if len(sel) < max_d or not mf or not root:
+    if len(sel) < max_d or not sel or not root:
         st.session_state.json_data       = None
         st.session_state.frame_paths     = []
         st.session_state.display_indices = []
         return
 
-    data, jpath = find_first_json(os.path.join(root, mf))
+    jpath = os.path.join(root, sel[0])
+    data  = load_json(jpath)
     st.session_state.json_data = data
-    if data and jpath:
+    if data:
         raw_paths = get_frame_paths(jpath)
         json_dir  = os.path.dirname(os.path.abspath(jpath))
         fps = [
@@ -153,6 +170,10 @@ def refresh_display() -> None:
 # Widget 回调
 # ════════════════════════════════════════════════════════════════════════════
 
+def on_threshold_change() -> None:
+    st.session_state.threshold = st.session_state._threshold_widget
+
+
 def on_root_change() -> None:
     st.session_state.root_dir = st.session_state._root_widget
     st.session_state.selected = []
@@ -166,17 +187,6 @@ def on_max_change() -> None:
     if len(st.session_state.selected) > new_max:
         st.session_state.selected = st.session_state.selected[:new_max]
         refresh_display()
-
-
-def on_main_folder_change() -> None:
-    st.session_state.main_folder = st.session_state._mf_widget
-    refresh_display()
-
-
-def on_pin_click(folder: str) -> None:
-    st.session_state.main_folder = folder
-    st.session_state._mf_widget  = folder
-    refresh_display()
 
 
 def on_folder_check(folder: str) -> None:
@@ -230,23 +240,13 @@ with left_col:
 
     st.divider()
 
-    # ══ Block B: 目录交互区 ═══════════════════════════════════════════════════
+    # ══ Block B: 文件选择区 ═══════════════════════════════════════════════════
     st.subheader("📂 目录")
 
-    # 主文件夹展示栏
-    # 注意：通过 key 管理，可由用户键入 或 点击 📌 按钮两种途径更新
-    if "_mf_widget" not in st.session_state:
-        st.session_state._mf_widget = st.session_state.main_folder
-    st.text_input(
-        "主文件夹",
-        key="_mf_widget",
-        on_change=on_main_folder_change,
-    )
-
-    # 选择模式开关按钮（"开启选择模式" 即需求中的显眼触发按钮）
-    n_sel  = len(st.session_state.selected)
-    max_d  = st.session_state.max_display
-    in_sel = st.session_state.sel_mode
+    # 选择模式开关
+    n_sel   = len(st.session_state.selected)
+    max_d   = st.session_state.max_display
+    in_sel  = st.session_state.sel_mode
     btn_lbl = "🔴 退出选择模式" if in_sel else "🟢 开启选择模式"
 
     if st.button(btn_lbl, use_container_width=True, key="btn_sel_toggle"):
@@ -256,48 +256,39 @@ with left_col:
     if in_sel:
         st.info(f"✅ 选择模式已开启 — 已选 **{n_sel}** / {max_d}", icon="☑️")
 
-    # 文件夹列表
-    folders = get_subfolders(st.session_state.root_dir)
+    # JSON 文件列表
+    json_files = get_json_files(st.session_state.root_dir)
 
-    if not folders:
+    if not json_files:
         if st.session_state.root_dir:
-            st.warning("⚠️ 路径无效或无子文件夹")
+            st.warning("⚠️ 路径无效或无 JSON 文件")
         else:
             st.caption("请先填写数据路径")
     else:
-        st.caption(f"共 {len(folders)} 个子文件夹")
-        for folder in folders:
-            is_sel  = folder in st.session_state.selected
-            is_main = folder == st.session_state.main_folder
+        st.caption(f"共 {len(json_files)} 个 JSON 文件")
+        for fname in json_files:
+            is_sel = fname in st.session_state.selected
 
-            fc1, fc2, fc3 = st.columns([0.08, 0.72, 0.20])
+            fc1, fc2 = st.columns([0.08, 0.92])
 
-            # 复选框（仅选择模式下可见）
             with fc1:
                 if in_sel:
                     st.checkbox(
                         "",
                         value=is_sel,
-                        key=f"chk_{folder}",
+                        key=f"chk_{fname}",
                         on_change=on_folder_check,
-                        args=(folder,),
+                        args=(fname,),
                         label_visibility="hidden",
                     )
 
-            # 文件夹名称（选中高亮 + 主文件夹星标）
             with fc2:
-                icon  = "📂" if is_sel else "📁"
-                badge = " ⭐" if is_main else ""
+                icon  = "📄" if is_sel else "📃"
                 style = "color:#27AE60;font-weight:600;" if is_sel else "color:#555;"
                 st.markdown(
-                    f'<p style="margin:2px 0;{style}">{icon} {folder}{badge}</p>',
+                    f'<p style="margin:2px 0;{style}">{icon} {fname}</p>',
                     unsafe_allow_html=True,
                 )
-
-            # 📌 按钮：右键双击的等效操作 — 单击即可将该文件夹设为主文件夹
-            with fc3:
-                st.button("📌", key=f"pin_{folder}", help="设为主文件夹",
-                          on_click=on_pin_click, args=(folder,))
 
 
 # ─────────────────────────── 右列 ────────────────────────────────────────────
@@ -317,20 +308,20 @@ with right_col:
         _cur_time = extract_frame_time(_fpaths[_idx[-1]])
 
     if not _sel:
-        st.info("💡 请在左侧开启选择模式并勾选文件夹")
+        st.info("💡 请在左侧开启选择模式并勾选 JSON 文件")
     else:
         _c_cols = st.columns(len(_sel))
-        for _ci, _folder in enumerate(_sel):
+        for _ci, _fname in enumerate(_sel):
             with _c_cols[_ci]:
                 st.markdown(
                     f'<div style="font-weight:700;font-size:1rem;'
                     f'border-bottom:2px solid #4A90D9;padding-bottom:4px;'
-                    f'margin-bottom:8px">📁 {_folder}</div>',
+                    f'margin-bottom:8px">📄 {_fname}</div>',
                     unsafe_allow_html=True,
                 )
-                _, _jpath = find_first_json(os.path.join(_root, _folder))
-                if not _jpath:
-                    st.warning("无 JSON 文件")
+                _jpath = os.path.join(_root, _fname)
+                if not os.path.isfile(_jpath):
+                    st.warning("文件不存在")
                     continue
 
                 _qa_list = get_qa_data(_jpath)
@@ -345,7 +336,7 @@ with right_col:
                     _q_matches = float(_q.get("time", -1)) == _cur_time
                     _r_matches = [
                         r for r in _entry.get("response", [])
-                        if float(r.get("time", -1)) == _cur_time
+                        if response_matches_frame(r, _cur_time)
                     ]
                     if not _q_matches and not _r_matches:
                         continue
@@ -435,6 +426,108 @@ with right_col:
                             """,
                             unsafe_allow_html=True,
                         )
+
+
+    # ══ Block E: 折线图展示区 ════════════════════════════════════════════════
+    if paths:
+        st.divider()
+
+        # 图例配置：多选（max_display > 1）或自动选中（= 1）
+        _sel_all = st.session_state.selected
+        if len(_sel_all) > 1:
+            _legend_files = st.multiselect(
+                "📊 图例",
+                options=_sel_all,
+                default=_sel_all,
+                key="_legend_widget",
+            )
+        else:
+            _legend_files = _sel_all
+
+        st.number_input(
+            "📊 触发阈值（回车确认）",
+            min_value=0.0, max_value=1.0, step=0.01, format="%.2f",
+            value=st.session_state.threshold,
+            key="_threshold_widget",
+            on_change=on_threshold_change,
+        )
+
+        # 为每个图例文件、每帧计算得分：1 - </silence> logit，无匹配则 0.0
+        _all_rows: list = []
+        for _lf in _legend_files:
+            _lpath = os.path.join(_root, _lf)
+            _lqa   = get_qa_data(_lpath)
+            for _i, _fp in enumerate(paths):
+                _ft    = extract_frame_time(_fp)
+                _score = 0.0
+                if _ft is not None:
+                    for _entry in _lqa:
+                        for _r in _entry.get("response", []):
+                            if response_matches_frame(_r, _ft):
+                                _silence = _r.get("logits", {}).get("</silence>")
+                                if _silence is not None:
+                                    _score = 1.0 - float(_silence)
+                                break
+                _all_rows.append({"帧序号": _i + 1, "得分": _score, "文件": _lf})
+
+        _thresh      = st.session_state.threshold
+        _frame_ticks = list(range(1, len(paths) + 1))
+
+        if _all_rows:
+            _df_score   = pd.DataFrame(_all_rows)
+            _chart_line = (
+                alt.Chart(_df_score)
+                .mark_line(point=True)
+                .encode(
+                    x=alt.X(
+                        "帧序号:Q",
+                        title="帧序号",
+                        axis=alt.Axis(grid=False, values=_frame_ticks, tickMinStep=1),
+                    ),
+                    y=alt.Y(
+                        "得分:Q",
+                        scale=alt.Scale(domain=[0, 1]),
+                        title="触发分数",
+                        axis=alt.Axis(grid=False),
+                    ),
+                    color=alt.Color("文件:N", legend=alt.Legend(title="图例")),
+                    tooltip=["帧序号:Q", "得分:Q", "文件:N"],
+                )
+            )
+        else:
+            # 无图例选中时，显示空白占位折线
+            _df_score   = pd.DataFrame({"帧序号": _frame_ticks, "得分": [0.0] * len(paths)})
+            _chart_line = (
+                alt.Chart(_df_score)
+                .mark_line()
+                .encode(
+                    x=alt.X("帧序号:Q", title="帧序号",
+                             axis=alt.Axis(grid=False, values=_frame_ticks, tickMinStep=1)),
+                    y=alt.Y("得分:Q", scale=alt.Scale(domain=[0, 1]),
+                             title="触发分数", axis=alt.Axis(grid=False)),
+                )
+            )
+
+        _chart_thresh = (
+            alt.Chart(pd.DataFrame({"阈值": [_thresh]}))
+            .mark_rule(color="red", strokeDash=[4, 4])
+            .encode(y="阈值:Q")
+        )
+
+        # 当前帧竖线（红色实线，随 Block D 刷新）
+        _cur_frame = idx[-1] + 1 if idx else None
+        _layers = [_chart_line, _chart_thresh]
+        if _cur_frame is not None:
+            _layers.append(
+                alt.Chart(pd.DataFrame({"当前帧": [_cur_frame]}))
+                .mark_rule(color="red", strokeWidth=2)
+                .encode(x="当前帧:Q")
+            )
+
+        st.altair_chart(
+            alt.layer(*_layers).configure_view(strokeWidth=0),
+            use_container_width=True,
+        )
 
 
 # ════════════════════════════════════════════════════════════════════════════
