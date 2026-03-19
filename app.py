@@ -69,12 +69,20 @@ if st.session_state._toast:
 # 导航逻辑（作为 on_click 回调使用，避免重复触发）
 # ════════════════════════════════════════════════════════════════════════════
 
+def _sync_slider() -> None:
+    """将滑块值同步为当前 display_indices 的最后一帧（1-based）。"""
+    idx = st.session_state.display_indices
+    if idx:
+        st.session_state._slider_widget = max(idx) + 1
+
+
 def nav_left() -> None:
     """左方向键：窗口向左滚动（右侧删除一张，左侧补上前一张）。"""
     idx = st.session_state.display_indices
     if not idx or idx[0] == 0:
         return
     st.session_state.display_indices = [idx[0] - 1] + idx[:-1]
+    _sync_slider()
 
 
 def nav_right() -> None:
@@ -85,6 +93,7 @@ def nav_right() -> None:
         return
     if not idx:
         st.session_state.display_indices = [0]
+        _sync_slider()
         return
     nxt = idx[-1] + 1
     if nxt >= len(paths):
@@ -93,6 +102,18 @@ def nav_right() -> None:
         st.session_state.display_indices = idx + [nxt]
     else:
         st.session_state.display_indices = idx[1:] + [nxt]
+    _sync_slider()
+
+
+def nav_slider() -> None:
+    """滑块跳转：以滑块值为最后一帧，向左展开最多 3 帧。"""
+    target = st.session_state._slider_widget - 1  # 转为 0-based
+    paths  = st.session_state.frame_paths
+    if not paths:
+        return
+    target = max(0, min(target, len(paths) - 1))
+    start  = max(0, target - 2)
+    st.session_state.display_indices = list(range(start, target + 1))
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -141,9 +162,8 @@ def refresh_display() -> None:
     """当选中数目达到最大展示数时，从第一个选中的 JSON 文件加载帧路径。"""
     sel   = st.session_state.selected
     root  = st.session_state.root_dir
-    max_d = st.session_state.max_display
 
-    if len(sel) < max_d or not sel or not root:
+    if not sel or not root:
         st.session_state.json_data       = None
         st.session_state.frame_paths     = []
         st.session_state.display_indices = []
@@ -155,10 +175,10 @@ def refresh_display() -> None:
     if data:
         raw_paths = get_frame_paths(jpath)
         json_dir  = os.path.dirname(os.path.abspath(jpath))
-        fps = [
-            p if os.path.isabs(p) else os.path.join(json_dir, p)
-            for p in raw_paths
-        ]
+        fps = sorted(
+            (p if os.path.isabs(p) else os.path.join(json_dir, p) for p in raw_paths),
+            key=lambda x: extract_frame_time(x) or 0.0,
+        )
         st.session_state.frame_paths     = fps
         st.session_state.display_indices = [0] if fps else []
     else:
@@ -367,15 +387,18 @@ with right_col:
         shown = [i + 1 for i in idx]
         pct   = (max(idx) + 1) / total if idx else 0.0
 
-        # 状态栏：← 按钮 | 帧信息+进度 | → 按钮
+        # 状态栏：← 按钮 | 滑块 | → 按钮
         sc1, sc2, sc3 = st.columns([1, 8, 1])
         with sc1:
             st.button("←", key="vis_left",  on_click=nav_left,  use_container_width=True)
         with sc2:
-            st.caption(
-                f"当前帧: {shown if shown else '—'}  /  共 {total} 帧  ·  进度 {pct * 100:.0f}%"
+            cur_frame = max(idx) + 1 if idx else 1
+            st.slider(
+                f"当前帧: {shown if shown else '—'}  /  共 {total} 帧  ·  进度 {pct * 100:.0f}%",
+                min_value=1, max_value=total, value=cur_frame,
+                key="_slider_widget",
+                on_change=nav_slider,
             )
-            st.progress(pct)
         with sc3:
             st.button("→", key="vis_right", on_click=nav_right, use_container_width=True)
 
@@ -391,7 +414,9 @@ with right_col:
                     name = os.path.basename(p)
                     st.caption(f"帧 **{fi + 1}** / {total}")
                     if os.path.isfile(p):
-                        img_bgr = cv2.imread(p)
+                        img_bgr = cv2.imdecode(
+                            np.fromfile(p, dtype=np.uint8), cv2.IMREAD_COLOR
+                        )
                         if img_bgr is not None:
                             img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
                             st.image(img_rgb, caption=name, use_container_width=True)
@@ -452,11 +477,61 @@ with right_col:
             on_change=on_threshold_change,
         )
 
-        # 为每个图例文件、每帧计算得分：1 - </silence> logit，无匹配则 0.0
+        # ── 构建帧时间 → 帧序号 的映射 ──────────────────────────────────
+        _time_to_idx: dict = {}
+        for _i, _fp in enumerate(paths):
+            _ft = extract_frame_time(_fp)
+            if _ft is not None:
+                _time_to_idx[_ft] = _i + 1  # 1-based
+
+        def _time_to_frame(t) -> Optional[int]:
+            """将秒数转为最近的帧序号。"""
+            try:
+                t = float(t)
+            except (ValueError, TypeError):
+                return None
+            if t in _time_to_idx:
+                return _time_to_idx[t]
+            # 找最近帧
+            if not _time_to_idx:
+                return None
+            closest = min(_time_to_idx.keys(), key=lambda x: abs(x - t))
+            return _time_to_idx[closest]
+
+        # ── 为每个图例文件、每帧计算得分 ──────────────────────────────
         _all_rows: list = []
+        _q_markers: list = []   # 提问标记
+        _r_markers: list = []   # 回复标记
         for _lf in _legend_files:
             _lpath = os.path.join(_root, _lf)
             _lqa   = get_qa_data(_lpath)
+
+            # 收集 Q & R 时间标记
+            _seen_q: set = set()
+            _seen_r: set = set()
+            for _entry in _lqa:
+                _q = _entry.get("question", {})
+                _qt = _q.get("time")
+                _qf = _time_to_frame(_qt)
+                if _qf is not None and _qf not in _seen_q:
+                    _seen_q.add(_qf)
+                    _q_markers.append({
+                        "帧序号": _qf, "时间": f"{_qt}s",
+                        "内容": _q.get("content", "")[:40],
+                        "文件": _lf,
+                    })
+                for _r in _entry.get("response", []):
+                    _rt = _r.get("time")
+                    _rf = _time_to_frame(_rt)
+                    if _rf is not None and _rf not in _seen_r:
+                        _seen_r.add(_rf)
+                        _r_markers.append({
+                            "帧序号": _rf, "时间": f"{_rt}s",
+                            "内容": _r.get("content", "")[:40],
+                            "文件": _lf,
+                        })
+
+            # 计算触发得分
             for _i, _fp in enumerate(paths):
                 _ft    = extract_frame_time(_fp)
                 _score = 0.0
@@ -473,50 +548,85 @@ with right_col:
         _thresh      = st.session_state.threshold
         _frame_ticks = list(range(1, len(paths) + 1))
 
+        # ── 折线图 ────────────────────────────────────────────────────
+        _x_axis = alt.Axis(grid=False, values=_frame_ticks, tickMinStep=1)
+        _x_enc  = alt.X("帧序号:Q", title="帧序号", axis=_x_axis)
+        _y_enc  = alt.Y("得分:Q", scale=alt.Scale(domain=[0, 1]),
+                         title="触发分数", axis=alt.Axis(grid=False))
+
         if _all_rows:
             _df_score   = pd.DataFrame(_all_rows)
             _chart_line = (
                 alt.Chart(_df_score)
                 .mark_line(point=True)
                 .encode(
-                    x=alt.X(
-                        "帧序号:Q",
-                        title="帧序号",
-                        axis=alt.Axis(grid=False, values=_frame_ticks, tickMinStep=1),
-                    ),
-                    y=alt.Y(
-                        "得分:Q",
-                        scale=alt.Scale(domain=[0, 1]),
-                        title="触发分数",
-                        axis=alt.Axis(grid=False),
-                    ),
+                    x=_x_enc, y=_y_enc,
                     color=alt.Color("文件:N", legend=alt.Legend(title="图例")),
                     tooltip=["帧序号:Q", "得分:Q", "文件:N"],
                 )
             )
         else:
-            # 无图例选中时，显示空白占位折线
             _df_score   = pd.DataFrame({"帧序号": _frame_ticks, "得分": [0.0] * len(paths)})
             _chart_line = (
-                alt.Chart(_df_score)
-                .mark_line()
-                .encode(
-                    x=alt.X("帧序号:Q", title="帧序号",
-                             axis=alt.Axis(grid=False, values=_frame_ticks, tickMinStep=1)),
-                    y=alt.Y("得分:Q", scale=alt.Scale(domain=[0, 1]),
-                             title="触发分数", axis=alt.Axis(grid=False)),
-                )
+                alt.Chart(_df_score).mark_line()
+                .encode(x=_x_enc, y=_y_enc)
             )
 
+        # ── 阈值线（红色虚线） ────────────────────────────────────────
         _chart_thresh = (
             alt.Chart(pd.DataFrame({"阈值": [_thresh]}))
             .mark_rule(color="red", strokeDash=[4, 4])
             .encode(y="阈值:Q")
         )
 
-        # 当前帧竖线（红色实线，随 Block D 刷新）
-        _cur_frame = idx[-1] + 1 if idx else None
         _layers = [_chart_line, _chart_thresh]
+
+        # ── 提问标记（蓝色三角 ▲，顶部） ─────────────────────────────
+        if _q_markers:
+            _df_q = pd.DataFrame(_q_markers)
+            _df_q["y"] = 1.0  # 固定在顶部
+            _layers.append(
+                alt.Chart(_df_q)
+                .mark_point(shape="triangle-up", size=120, filled=True,
+                            color="#2980B9", opacity=0.85)
+                .encode(
+                    x=alt.X("帧序号:Q"),
+                    y=alt.Y("y:Q", scale=alt.Scale(domain=[0, 1])),
+                    tooltip=[
+                        alt.Tooltip("时间:N", title="提问时间"),
+                        alt.Tooltip("内容:N", title="提问内容"),
+                        alt.Tooltip("文件:N", title="文件"),
+                    ],
+                )
+            )
+            # 提问竖线（蓝色虚线）
+            _layers.append(
+                alt.Chart(_df_q)
+                .mark_rule(color="#2980B9", strokeDash=[3, 3], opacity=0.4)
+                .encode(x=alt.X("帧序号:Q"))
+            )
+
+        # ── 回复标记（绿色菱形 ◆，底部） ─────────────────────────────
+        if _r_markers:
+            _df_r = pd.DataFrame(_r_markers)
+            _df_r["y"] = 0.0  # 固定在底部
+            _layers.append(
+                alt.Chart(_df_r)
+                .mark_point(shape="diamond", size=100, filled=True,
+                            color="#27AE60", opacity=0.85)
+                .encode(
+                    x=alt.X("帧序号:Q"),
+                    y=alt.Y("y:Q", scale=alt.Scale(domain=[0, 1])),
+                    tooltip=[
+                        alt.Tooltip("时间:N", title="回复时间"),
+                        alt.Tooltip("内容:N", title="回复内容"),
+                        alt.Tooltip("文件:N", title="文件"),
+                    ],
+                )
+            )
+
+        # ── 当前帧竖线（红色实线） ────────────────────────────────────
+        _cur_frame = idx[-1] + 1 if idx else None
         if _cur_frame is not None:
             _layers.append(
                 alt.Chart(pd.DataFrame({"当前帧": [_cur_frame]}))

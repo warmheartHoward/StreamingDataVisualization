@@ -1,0 +1,72 @@
+# --- VS Code 相关 ---
+.vscode/
+# 如果你想保留团队共享的 launch.json 或 tasks.json，可以改用：
+# .vscode/*
+# !.vscode/launch.json
+# !.vscode/tasks.json
+# !.vscode/extensions.json
+*.code-workspace
+
+
+# --- Python 缓存与环境 ---
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# --- 虚拟环境 ---
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# --- 单元测试/覆盖率 ---
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+pytestdebug.log
+
+# --- Jupyter Notebook 缓存 ---
+.ipynb_checkpoints
+
+# --- 数据科学/大模型相关 (针对你的项目背景建议增加) ---
+# 忽略大型模型权重文件
+*.pth
+*.onnx
+*.bin
+*.model
+*.ckpt
+
+# 忽略临时数据和日志 (如你之前提到的 logs 文件)
+logs/
+*.log
+data/
+temp/
